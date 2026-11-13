@@ -1,0 +1,103 @@
+# ESTUDIANTE 3: CLASE RESERVA Y GESTIÓN DE PAGOS
+# Desarrollado para el sistema Software FJ
+
+class Reserva(EntidadBase):
+    """Clase que integra cliente, servicio, duración y estados de la reserva."""
+    
+    def __init__(self, codigo_reserva, cliente, servicio, duracion):
+        self.codigo_reserva = codigo_reserva
+        self.cliente = cliente
+        self.servicio = servicio
+        self.duracion = duracion
+        self.estado = "Pendiente"  # Estados: Pendiente, Confirmada, Cancelada
+        
+        # Validación inicial de parámetros mediante el servicio seleccionado
+        self.servicio.validar_parametros(duracion=self.duracion)
+
+    # ENCAPSULAMIENTO Y VALIDACIÓN DEL CÓDIGO DE RESERVA
+
+    @property
+    def codigo_reserva(self):
+        return self._codigo_reserva
+
+    @codigo_reserva.setter
+    def codigo_reserva(self, valor):
+        if not isinstance(valor, str) or len(valor.strip()) < 3:
+            registrar_error(f"Código de reserva inválido: {valor}")
+            raise DatosInvalidosError(f"Código de reserva inválido: '{valor}'. Mínimo 3 caracteres.")
+        self._codigo_reserva = valor.strip().upper()
+
+    # MÉTODOS DE GESTIÓN DE ESTADOS
+
+    def confirmar_reserva(self):
+        """Confirma la reserva si el servicio se encuentra disponible."""
+        if self.estado == "Confirmada":
+            registrar_error(f"Intento de re-confirmar reserva {self.codigo_reserva}")
+            raise OperacionNoPermitidaError("La reserva ya se encuentra confirmada.")
+        if self.estado == "Cancelada":
+            registrar_error(f"Intento de confirmar reserva cancelada {self.codigo_reserva}")
+            raise OperacionNoPermitidaError("No se puede confirmar una reserva que fue cancelada.")
+        
+        # Verifica disponibilidad y registra uso en el servicio
+        self.servicio.verificar_disponibilidad()
+        self.estado = "Confirmada"
+        self.servicio.registrar_uso()
+        registrar_evento(f"Reserva {self.codigo_reserva} confirmada con éxito para el cliente {self.cliente.nombre}.")
+
+    def cancelar_reserva(self):
+        """Cancela la reserva activa y libera recursos del servicio."""
+        if self.estado == "Cancelada":
+            registrar_error(f"Intento de re-cancelar reserva {self.codigo_reserva}")
+            raise OperacionNoPermitidaError("La reserva ya se encuentra cancelada.")
+        
+        if self.estado == "Confirmada":
+            self.servicio.liberar_uso()
+            
+        self.estado = "Cancelada"
+        registrar_evento(f"Reserva {self.codigo_reserva} cancelada correctamente.")
+
+    # MÉTODOS DE CÁLCULO FINANCIERO Y SOBRECARGA DE PARÁMETROS
+  
+    def procesar_pago(self, descuento=0.0, aplicar_impuesto=True):
+        """
+        Calcula el costo total del servicio integrando opcionalmente 
+        un porcentaje de descuento y la aplicación de impuestos (IVA 19%).
+        """
+        try:
+            if not isinstance(descuento, (int, float)) or not (0.0 <= descuento <= 1.0):
+                raise DatosInvalidosError("El porcentaje de descuento debe ser un valor numérico entre 0.0 y 1.0.")
+            
+            # Obtiene el costo base calculado por el servicio correspondiente (Polimorfismo)
+            costo_base = self.servicio.calcular_costo(duracion=self.duracion)
+            
+            # Aplica descuento
+            costo_con_descuento = costo_base * (1.0 - descuento)
+            
+            # Aplica impuestos si corresponde
+            impuestos = 0.0
+            if aplicar_impuesto:
+                impuestos = costo_con_descuento * 0.19  # IVA del 19%
+                
+            total_final = round(costo_con_descuento + impuestos, 2)
+            registrar_evento(f"Cálculo financiero procesado para reserva {self.codigo_reserva}: Total ${total_final:,.2f}")
+            return total_final
+            
+        except Exception as err:
+            registrar_error(f"Error procesando el pago de la reserva {self.codigo_reserva}", err)
+            raise CalculoInconsistenteError("Fallo crítico en el cálculo financiero o parámetros de pago de la reserva.") from err
+
+    # IMPLEMENTACIÓN DE ENTIDAD BASE
+
+    def obtener_detalles(self):
+        """Devuelve una descripción detallada de la reserva."""
+        return (
+            f"Reserva [Código: {self.codigo_reserva} | "
+            f"Cliente: {self.cliente.nombre} | "
+            f"Servicio: {self.servicio.nombre} | "
+            f"Duración: {self.duracion}h | "
+            f"Estado: {self.estado}]"
+        )
+
+    def __str__(self):
+        return self.obtener_detalles()
+
