@@ -1,20 +1,58 @@
-# ESTUDIANTE 3: CLASE RESERVA Y GESTIÓN DE PAGOS
-# Desarrollado para el sistema Software FJ
+# ESTUDIANTE 3: Clase Reserva y gestión de pagos
+# Excepción para los errores relacionados con las reservas
+class ReservaInvalidaError(FJBaseException):
+    """Se utiliza cuando una reserva no cumple las condiciones necesarias."""
 
+    def __init__(
+        self,
+        mensaje="La reserva no cumple con las condiciones requeridas."
+    ):
+        super().__init__(mensaje)
+
+
+# Clase Reserva
 class Reserva(EntidadBase):
-    """Clase que integra cliente, servicio, duración y estados de la reserva."""
-    
+
+    ESTADOS_VALIDOS = {"Pendiente", "Confirmada", "Cancelada"}
+
     def __init__(self, codigo_reserva, cliente, servicio, duracion):
+
+        # Comprobar que se haya recibido un cliente válido.
+        if not isinstance(cliente, Cliente):
+            raise ReservaInvalidaError(
+                "La reserva necesita un cliente válido."
+            )
+
+        # Comprobar que se haya recibido un servicio válido.
+        if not isinstance(servicio, Servicio):
+            raise ReservaInvalidaError(
+                "La reserva necesita un servicio válido."
+            )
+
         self.codigo_reserva = codigo_reserva
         self.cliente = cliente
         self.servicio = servicio
-        self.duracion = duracion
-        self.estado = "Pendiente"  # Estados: Pendiente, Confirmada, Cancelada
-        
-        # Validación inicial de parámetros mediante el servicio seleccionado
-        self.servicio.validar_parametros(duracion=self.duracion)
 
-    # ENCAPSULAMIENTO Y VALIDACIÓN DEL CÓDIGO DE RESERVA
+        # La duración se valida mediante su propiedad.
+        self._duracion = None
+        self.duracion = duracion
+
+        # Toda reserva comienza en estado pendiente.
+        self.estado = "Pendiente"
+
+        # El servicio también verifica que la duración sea válida.
+        self.servicio.validar_parametros(
+            duracion=self.duracion
+        )
+
+        registrar_evento(
+            f"Reserva creada | Código: {self.codigo_reserva} | "
+            f"Cliente: {self.cliente.nombre} | "
+            f"Servicio: {self.servicio.nombre} | "
+            f"Duración: {self.duracion} horas"
+        )
+
+    # VALIDACIÓN DEL CÓDIGO DE RESERVA
 
     @property
     def codigo_reserva(self):
@@ -22,82 +60,284 @@ class Reserva(EntidadBase):
 
     @codigo_reserva.setter
     def codigo_reserva(self, valor):
+
         if not isinstance(valor, str) or len(valor.strip()) < 3:
-            registrar_error(f"Código de reserva inválido: {valor}")
-            raise DatosInvalidosError(f"Código de reserva inválido: '{valor}'. Mínimo 3 caracteres.")
+            raise ReservaInvalidaError(
+                f"Código de reserva inválido: '{valor}'. "
+                "Debe tener mínimo 3 caracteres."
+            )
+
         self._codigo_reserva = valor.strip().upper()
 
-    # MÉTODOS DE GESTIÓN DE ESTADOS
+    # VALIDACIÓN DE LA DURACIÓN
+
+    @property
+    def duracion(self):
+        return self._duracion
+
+    @duracion.setter
+    def duracion(self, valor):
+
+        # Evita que True y False sean aceptados como números.
+        if isinstance(valor, bool):
+            raise ReservaInvalidaError(
+                "La duración debe ser un número mayor que cero."
+            )
+
+        try:
+            valor = float(valor)
+
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ReservaInvalidaError(
+                f"Duración inválida: '{valor}'. Se esperaba un número."
+            ) from error
+
+        # Comprueba que el número sea válido y finito.
+        if not math.isfinite(valor) or valor <= 0:
+            raise ReservaInvalidaError(
+                "La duración debe ser un número mayor que cero."
+            )
+
+        self._duracion = valor
+
+    # VALIDACIÓN DEL ESTADO
+
+    @property
+    def estado(self):
+        return self._estado
+
+    @estado.setter
+    def estado(self, nuevo):
+
+        if not isinstance(nuevo, str) or nuevo not in self.ESTADOS_VALIDOS:
+            raise ReservaInvalidaError(
+                f"Estado de reserva no válido: '{nuevo}'."
+            )
+
+        self._estado = nuevo
+
+    # CONFIRMAR RESERVA
 
     def confirmar_reserva(self):
-        """Confirma la reserva si el servicio se encuentra disponible."""
-        if self.estado == "Confirmada":
-            registrar_error(f"Intento de re-confirmar reserva {self.codigo_reserva}")
-            raise OperacionNoPermitidaError("La reserva ya se encuentra confirmada.")
-        if self.estado == "Cancelada":
-            registrar_error(f"Intento de confirmar reserva cancelada {self.codigo_reserva}")
-            raise OperacionNoPermitidaError("No se puede confirmar una reserva que fue cancelada.")
-        
-        # Verifica disponibilidad y registra uso en el servicio
-        self.servicio.verificar_disponibilidad()
-        self.estado = "Confirmada"
-        self.servicio.registrar_uso()
-        registrar_evento(f"Reserva {self.codigo_reserva} confirmada con éxito para el cliente {self.cliente.nombre}.")
+        """Confirma una reserva cuando el servicio está disponible."""
+
+        try:
+            if self.estado == "Confirmada":
+                raise OperacionNoPermitidaError(
+                    "Esta reserva ya se encuentra confirmada."
+                )
+
+            if self.estado == "Cancelada":
+                raise OperacionNoPermitidaError(
+                    "No se puede confirmar una reserva cancelada."
+                )
+
+            # Verificar que el servicio pueda utilizarse.
+            self.servicio.verificar_disponibilidad()
+
+            # Registrar el uso del servicio.
+            self.servicio.registrar_uso()
+
+            # Cambiar el estado después de completar las operaciones.
+            self.estado = "Confirmada"
+
+        except FJBaseException as error:
+            registrar_error(
+                f"No se pudo confirmar la reserva {self.codigo_reserva}",
+                error
+            )
+            raise
+
+        except Exception as error:
+            registrar_error(
+                f"Error inesperado al confirmar la reserva "
+                f"{self.codigo_reserva}",
+                error
+            )
+            raise
+
+        else:
+            registrar_evento(
+                f"Reserva {self.codigo_reserva} confirmada correctamente."
+            )
+            return True
+
+        finally:
+            registrar_evento(
+                f"Finalizó el intento de confirmación | "
+                f"Reserva: {self.codigo_reserva} | "
+                f"Estado: {self.estado}"
+            )
+
+    # CANCELAR RESERVA
 
     def cancelar_reserva(self):
-        """Cancela la reserva activa y libera recursos del servicio."""
-        if self.estado == "Cancelada":
-            registrar_error(f"Intento de re-cancelar reserva {self.codigo_reserva}")
-            raise OperacionNoPermitidaError("La reserva ya se encuentra cancelada.")
-        
-        if self.estado == "Confirmada":
-            self.servicio.liberar_uso()
-            
-        self.estado = "Cancelada"
-        registrar_evento(f"Reserva {self.codigo_reserva} cancelada correctamente.")
+        """Cancela la reserva y libera el servicio si estaba confirmado."""
 
-    # MÉTODOS DE CÁLCULO FINANCIERO Y SOBRECARGA DE PARÁMETROS
-  
+        try:
+            if self.estado == "Cancelada":
+                raise OperacionNoPermitidaError(
+                    "Esta reserva ya se encuentra cancelada."
+                )
+
+            # Si estaba confirmada, se libera el servicio.
+            if self.estado == "Confirmada":
+                self.servicio.liberar_uso()
+
+            self.estado = "Cancelada"
+
+        except FJBaseException as error:
+            registrar_error(
+                f"No se pudo cancelar la reserva {self.codigo_reserva}",
+                error
+            )
+            raise
+
+        except Exception as error:
+            registrar_error(
+                f"Error inesperado al cancelar la reserva "
+                f"{self.codigo_reserva}",
+                error
+            )
+            raise
+
+        else:
+            registrar_evento(
+                f"Reserva {self.codigo_reserva} cancelada correctamente."
+            )
+            return True
+
+        finally:
+            registrar_evento(
+                f"Finalizó el intento de cancelación | "
+                f"Reserva: {self.codigo_reserva} | "
+                f"Estado: {self.estado}"
+            )
+
+    # PROCESAR PAGO
+
     def procesar_pago(self, descuento=0.0, aplicar_impuesto=True):
         """
-        Calcula el costo total del servicio integrando opcionalmente 
-        un porcentaje de descuento y la aplicación de impuestos (IVA 19%).
-        """
-        try:
-            if not isinstance(descuento, (int, float)) or not (0.0 <= descuento <= 1.0):
-                raise DatosInvalidosError("El porcentaje de descuento debe ser un valor numérico entre 0.0 y 1.0.")
-            
-            # Obtiene el costo base calculado por el servicio correspondiente (Polimorfismo)
-            costo_base = self.servicio.calcular_costo(duracion=self.duracion)
-            
-            # Aplica descuento
-            costo_con_descuento = costo_base * (1.0 - descuento)
-            
-            # Aplica impuestos si corresponde
-            impuestos = 0.0
-            if aplicar_impuesto:
-                impuestos = costo_con_descuento * 0.19  # IVA del 19%
-                
-            total_final = round(costo_con_descuento + impuestos, 2)
-            registrar_evento(f"Cálculo financiero procesado para reserva {self.codigo_reserva}: Total ${total_final:,.2f}")
-            return total_final
-            
-        except Exception as err:
-            registrar_error(f"Error procesando el pago de la reserva {self.codigo_reserva}", err)
-            raise CalculoInconsistenteError("Fallo crítico en el cálculo financiero o parámetros de pago de la reserva.") from err
+        Calcula el valor de una reserva.
 
-    # IMPLEMENTACIÓN DE ENTIDAD BASE
+        Ejemplos:
+        procesar_pago()
+        procesar_pago(descuento=0.10)
+        procesar_pago(aplicar_impuesto=False)
+        procesar_pago(0.10, False)
+
+        El descuento se expresa como decimal:
+        0.10 equivale al 10 %.
+        """
+
+        try:
+            # Solo se permite pagar una reserva confirmada.
+            if self.estado != "Confirmada":
+                raise OperacionNoPermitidaError(
+                    "Solo se pueden procesar pagos de reservas confirmadas."
+                )
+
+            # Validar el descuento.
+            if isinstance(descuento, bool):
+                raise DatosInvalidosError(
+                    "El descuento debe ser un número entre 0 y 1."
+                )
+
+            if not isinstance(descuento, (int, float)):
+                raise DatosInvalidosError(
+                    "El descuento debe ser un valor numérico."
+                )
+
+            descuento = float(descuento)
+
+            if not math.isfinite(descuento) or not 0 <= descuento <= 1:
+                raise DatosInvalidosError(
+                    "El descuento debe estar entre 0.0 y 1.0."
+                )
+
+            # Validar la opción de impuesto.
+            if not isinstance(aplicar_impuesto, bool):
+                raise DatosInvalidosError(
+                    "La opción de aplicar impuesto debe ser True o False."
+                )
+
+            # Obtener el costo calculado por el servicio.
+            costo_base = self.servicio.calcular_costo(
+                duracion=self.duracion
+            )
+
+            if (
+                isinstance(costo_base, bool)
+                or not isinstance(costo_base, (int, float))
+                or not math.isfinite(float(costo_base))
+                or costo_base < 0
+            ):
+                raise CalculoInconsistenteError(
+                    "El servicio devolvió un costo base inválido."
+                )
+
+            costo_base = float(costo_base)
+
+            # Aplicar el descuento.
+            costo_con_descuento = costo_base * (1 - descuento)
+
+            # Aplicar IVA del 19 % cuando corresponda.
+            impuestos = 0.0
+
+            if aplicar_impuesto:
+                impuestos = costo_con_descuento * 0.19
+
+            total_final = round(
+                costo_con_descuento + impuestos,
+                2
+            )
+
+        except FJBaseException as error:
+            registrar_error(
+                f"Error al procesar el pago de la reserva "
+                f"{self.codigo_reserva}",
+                error
+            )
+            raise
+
+        except Exception as error:
+            registrar_error(
+                f"Error inesperado al procesar el pago de la reserva "
+                f"{self.codigo_reserva}",
+                error
+            )
+
+            raise CalculoInconsistenteError(
+                "No fue posible completar el cálculo del pago."
+            ) from error
+
+        else:
+            registrar_evento(
+                f"Pago calculado | Reserva: {self.codigo_reserva} | "
+                f"Total: ${total_final:,.2f}"
+            )
+
+            return total_final
+
+        finally:
+            registrar_evento(
+                f"Finalizó el intento de pago | "
+                f"Reserva: {self.codigo_reserva} | "
+                f"Estado: {self.estado}"
+            )
+
+    # DETALLES DE LA RESERVA
 
     def obtener_detalles(self):
-        """Devuelve una descripción detallada de la reserva."""
+        """Muestra la información principal de la reserva."""
+
         return (
             f"Reserva [Código: {self.codigo_reserva} | "
             f"Cliente: {self.cliente.nombre} | "
             f"Servicio: {self.servicio.nombre} | "
-            f"Duración: {self.duracion}h | "
+            f"Duración: {self.duracion} horas | "
             f"Estado: {self.estado}]"
         )
 
     def __str__(self):
         return self.obtener_detalles()
-
